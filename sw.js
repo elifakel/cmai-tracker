@@ -1,6 +1,6 @@
 // Service worker: makes the app work fully offline.
 // Bump VERSION whenever you change any app file so phones pick up the update.
-const VERSION = 'cmai-v1.0.0';
+const VERSION = 'cmai-v1.1.0';
 const SHELL = [
   './',
   './index.html',
