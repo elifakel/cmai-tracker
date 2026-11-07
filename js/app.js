@@ -1,7 +1,7 @@
 import { GROUPS, ITEMS, ITEM_BY_ID, GROUP_BY_ID, SCALE, ICONS, computeScores, PERIOD_DAYS } from './cmai.js';
 import { db, uid, newSalt, hashPin, DAY, startOfDay, addDays, dayIndex, periodOf, currentPeriodIndex, exportAll, importAll } from './db.js';
 
-const APP_VERSION = '1.0.0';
+const APP_VERSION = '1.1.0';
 const app = document.getElementById('app');
 const toastEl = document.getElementById('toast');
 const dialogEl = document.getElementById('dialog');
@@ -22,7 +22,7 @@ const I = {
   gear: 'M12 9a3 3 0 1 0 0 6 3 3 0 0 0 0-6zM19.4 15a1.7 1.7 0 0 0 .3 1.8l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-2.8 1.2V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-2.9-1.2l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1A1.7 1.7 0 0 0 3.2 14H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.2-2.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1A1.7 1.7 0 0 0 10 3.2V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 2.9 1.2l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0 1.2 2.9H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1z',
   record: 'M12 5v14M5 12h14', score: 'M4 20V10M10 20V4M16 20v-7M22 20H2', report: 'M3 17l6-6 4 4 8-8M15 7h6v6',
   history: 'M12 7v5l3 2M3 12a9 9 0 1 0 3-6.7L3 8M3 3v5h5', download: 'M12 3v12M7 10l5 5 5-5M4 21h16', upload: 'M12 21V9M7 14l5-5 5 5M4 3h16',
-  calendar: 'M4 5h16v16H4zM4 10h16M9 3v4M15 3v4', edit: 'M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4', install: 'M12 3v12M7 10l5 5 5-5M5 21h14'
+  calendar: 'M4 5h16v16H4zM4 10h16M9 3v4M15 3v4', down: 'M6 9l6 6 6-6', move: 'M5 12h14M13 6l6 6-6 6', trash: 'M4 7h16M10 11v6M14 11v6M6 7l1 13h10l1-13M9 7V4h6v3', help: 'M12 21a9 9 0 1 0 0-18 9 9 0 0 0 0 18zM9.5 9a2.5 2.5 0 1 1 3.5 2.3c-.6.3-1 .9-1 1.6v.6M12 17h.01', edit: 'M4 20h4L19 9l-4-4L4 16v4zM13 7l4 4', install: 'M12 3v12M7 10l5 5 5-5M5 21h14'
 };
 
 const pad = (n) => String(n).padStart(2, '0');
@@ -79,6 +79,11 @@ async function overridesFor(patientId, periodIndex) {
 }
 
 function inRange(events, start, end) { return events.filter((e) => e.ts >= start && e.ts < end); }
+
+// Each patient belongs to one caregiver (ownerId). Older records only have createdBy.
+const ownerOf = (p) => p.ownerId ?? p.createdBy ?? null;
+const isMine = (p) => !ownerOf(p) || ownerOf(p) === me?.id;
+async function myPatients() { return (await db.all('patients')).filter(isMine).sort((a, b) => a.id.localeCompare(b.id, undefined, { numeric: true })); }
 
 // ---------- rendering ----------
 async function render() {
@@ -180,7 +185,7 @@ async function vLogin(id) {
 
 // ---- Patients ----
 async function patientSummaries() {
-  const patients = await db.all('patients');
+  const patients = await myPatients();
   const allOv = await db.all('overrides');
   const now = Date.now();
   const out = [];
@@ -260,6 +265,7 @@ function vNewPatient() {
 async function vPatient(id, tab) {
   const p = await db.get('patients', id);
   if (!p) return `<main class="content"><div class="card"><h2>Patient not found</h2><a class="btn btn-primary" href="#/patients">Back to patients</a></div></main>`;
+  if (!isMine(p)) return `<main class="content"><div class="card form"><h2>This patient belongs to another caregiver</h2><p class="muted" style="margin:0">Only the caregiver this patient is assigned to can open it. They can move it to you from Settings › My patients.</p><a class="btn btn-primary" href="#/patients">Back to my patients</a></div></main>`;
   const events = (await db.eventsFor(p.id)).sort((a, b) => b.ts - a.ts);
   const cur = currentPeriodIndex(p);
   const curPer = periodOf(p, cur);
@@ -272,10 +278,27 @@ async function vPatient(id, tab) {
   else if (tab === 'report') body = vReport(ctx);
   else if (tab === 'history') body = vHistory(ctx);
   const tabs = [['record', 'Record', I.record], ['score', 'Score', I.score], ['report', 'Report', I.report], ['history', 'History', I.history]];
+  const mine = await myPatients();
+  const allEv = await db.all('events');
+  const today = startOfDay(Date.now());
+  const todayN = {};
+  for (const e of allEv) if (e.ts >= today) todayN[e.patientId] = (todayN[e.patientId] || 0) + 1;
   return `
   <header class="p-head">
     <a class="icon-btn" href="#/patients" aria-label="Back to patients">${svg(I.back, 20)}</a>
-    <div class="grow"><div class="title ellipsis" style="font-weight:800">Patient ${esc(p.id)}</div><div class="small muted ellipsis">Caregiver ${esc(me.name)} · period ${cur + 1}</div></div>
+    <details class="switch grow">
+      <summary aria-label="Patient ${esc(p.id)}. Tap to switch patient">
+        <span class="grow" style="min-width:0"><span class="title ellipsis" style="font-weight:800;display:block">Patient ${esc(p.id)}</span><span class="small muted ellipsis" style="display:block">Caregiver ${esc(me.name)} · ID ${esc(p.id)}</span></span>
+        ${svg(I.down, 18, 'var(--muted)')}
+      </summary>
+      <div class="switch-menu">
+        <div class="switch-head">Switch patient</div>
+        ${mine.map((x) => `<a class="switch-item" href="#/p/${enc(x.id)}/${tab}" ${x.id === p.id ? 'aria-current="page"' : ''}>
+          <span class="switch-check">${x.id === p.id ? svg(I.check, 18, 'var(--accent)', 2.6) : ''}</span>
+          <span class="grow" style="min-width:0"><span class="ellipsis" style="display:block;font-weight:700">Patient ${esc(x.id)}</span><span class="tiny muted ellipsis" style="display:block">ID ${esc(x.id)} · Today: ${plural(todayN[x.id] || 0, 'event')}</span></span></a>`).join('')}
+        <a class="switch-all" href="#/patients">All patients</a>
+      </div>
+    </details>
     <span class="pill">CMAI ${curTotal}</span>
   </header>
   <main class="content with-nav">${body}</main>
@@ -481,6 +504,9 @@ function vHistory(ctx) {
 async function vSettings() {
   let persisted = null;
   try { persisted = await navigator.storage?.persisted?.(); } catch { /* unsupported */ }
+  const mine = await myPatients();
+  const evCount = {};
+  for (const e of await db.all('events')) evCount[e.patientId] = (evCount[e.patientId] || 0) + 1;
   const radio = (name, v, label, cur) => `<label class="radio"><input type="radio" name="${name}" value="${v}" data-change="${name}" ${cur === v ? 'checked' : ''}>${label}</label>`;
   return `
   <header class="p-head"><a class="icon-btn" href="#/patients" aria-label="Back">${svg(I.back, 20)}</a><h1 class="grow" style="font-size:1.3rem">Settings</h1></header>
@@ -491,6 +517,35 @@ async function vSettings() {
       <button class="btn btn-ghost btn-block" data-act="rename">Change my name</button>
       <button class="btn btn-ghost btn-block" data-act="changePin">Change my PIN</button>
       <button class="btn btn-ghost btn-block" data-act="signOut">Sign out</button>
+    </section>
+    <h2 class="section-head" style="font-size:1rem">My patients</h2>
+    <section class="card settings-group">
+      <p class="small muted" style="margin:0">Rename, move or delete a patient here. Moving gives the patient and all of their records to another caregiver on this device.</p>
+      ${mine.length ? mine.map((p) => `
+        <div class="manage-row">
+          <div class="grow" style="min-width:0"><div class="title ellipsis">Patient ${esc(p.id)}</div><div class="tiny muted">${plural(evCount[p.id] || 0, 'event')} · since ${fmtLong(p.startDate)}</div></div>
+          <div class="manage-btns">
+            <button class="btn btn-ghost btn-sm" data-act="renamePatient" data-id="${esc(p.id)}" aria-label="Rename patient ${esc(p.id)}">${svg(I.edit, 16)} Rename</button>
+            <button class="btn btn-ghost btn-sm" data-act="movePatient" data-id="${esc(p.id)}" aria-label="Move patient ${esc(p.id)} to another caregiver">${svg(I.move, 16)} Move</button>
+            <button class="btn btn-danger btn-sm" data-act="deletePatient" data-id="${esc(p.id)}" aria-label="Delete patient ${esc(p.id)}">${svg(I.trash, 16)} Delete</button>
+          </div>
+        </div>`).join('') : '<p class="small muted" style="margin:0">You have no patients yet.</p>'}
+    </section>
+    <h2 class="section-head" style="font-size:1rem">Help</h2>
+    <section class="card">
+      <details class="help">
+        <summary>${svg(I.help, 20, 'var(--accent)')}<span class="grow">How to use CMAI Tracker</span>${svg(I.down, 18, 'var(--muted)')}</summary>
+        <ol class="help-steps">
+          <li><strong>Add a patient.</strong> On <em>Your patients</em>, tap <em>New patient</em>. Use a study code (e.g. P006), not a real name. 14-day periods start on the first day you choose.</li>
+          <li><strong>Record a behavior.</strong> Open the patient and tap the behavior the moment you see it. Use the search box or the group buttons to find it.</li>
+          <li><strong>Fix a mistake.</strong> Right after recording, tap <em>Undo</em> or <em>Time</em>. Later, open <em>History</em> to change the time or delete an event.</li>
+          <li><strong>See the score.</strong> <em>Score</em> shows the CMAI total and group scores for the 14-day period. Open a group and tap a number to set a rating by hand.</li>
+          <li><strong>See patterns.</strong> <em>Report</em> shows events per day for the period, or per hour for one day.</li>
+          <li><strong>Switch patients.</strong> Tap the patient’s name at the top of any screen to jump to another patient, or choose <em>All patients</em>.</li>
+          <li><strong>Hand over a patient.</strong> In <em>Settings › My patients</em>, tap <em>Move</em> and choose the caregiver.</li>
+          <li><strong>Keep data safe.</strong> Tap <em>Download full backup</em> below regularly. Data lives only on this device.</li>
+        </ol>
+      </details>
     </section>
     <h2 class="section-head" style="font-size:1rem">Text size</h2>
     <section class="card" role="radiogroup" aria-label="Text size"><p class="small muted" style="margin:0 0 .25rem">Changes the size of the text in the whole app.</p>
@@ -618,6 +673,60 @@ const actions = {
     await db.put('caregivers', { ...me, salt, pinHash: await hashPin(p1, salt) });
     toast('PIN changed');
   },
+  async renamePatient(el) {
+    const p = await db.get('patients', el.dataset.id);
+    if (!p || !isMine(p)) return;
+    const r = await dialog(`<h2>Rename patient</h2><p class="muted small" style="margin:0 0 .75rem">All records stay with the patient under the new ID.</p>
+      <label class="sr-only" for="nid">New patient ID</label><input class="input" id="nid" name="nid" value="${esc(p.id)}" maxlength="20" autocomplete="off" autocapitalize="characters" required autofocus>${dlgButtons('Save')}`);
+    const nid = val('nid').trim().replace(/\s+/g, '-');
+    if (r !== 'ok' || !nid || nid === p.id) return;
+    if (await db.get('patients', nid)) { toast('A patient with this ID already exists on this device.'); return; }
+    await db.put('patients', { ...p, id: nid });
+    for (const e of await db.eventsFor(p.id)) await db.put('events', { ...e, patientId: nid });
+    for (const o of (await db.all('overrides')).filter((o) => o.patientId === p.id)) {
+      await db.del('overrides', o.key);
+      await db.put('overrides', { ...o, key: `${nid}|${o.period}|${o.itemId}`, patientId: nid });
+    }
+    await db.del('patients', p.id);
+    for (const m of [ui.period, ui.reportDay, ui.historyDay]) delete m[p.id];
+    toast(`Patient ${esc(p.id)} renamed to ${esc(nid)}`); render();
+  },
+  async movePatient(el) {
+    const p = await db.get('patients', el.dataset.id);
+    if (!p || !isMine(p)) return;
+    const others = (await db.all('caregivers')).filter((c) => c.id !== me.id).sort((a, b) => a.name.localeCompare(b.name));
+    if (!others.length) { toast('There is no other caregiver on this device yet.'); return; }
+    const r = await dialog(`<h2>Move patient ${esc(p.id)}</h2><p class="muted small" style="margin:0 0 .75rem">The patient and all of their records go to the caregiver you choose. It will no longer appear in your list.</p>
+      <label class="small" for="to" style="font-weight:600">Move to</label>
+      <select class="input" id="to" name="to" style="margin-top:.4rem" autofocus>${others.map((c) => `<option value="${esc(c.id)}">${esc(c.name)}</option>`).join('')}</select>${dlgButtons('Move')}`);
+    if (r !== 'ok') return;
+    const to = others.find((c) => c.id === val('to'));
+    if (!to) return;
+    await db.put('patients', { ...p, ownerId: to.id, movedAt: Date.now(), movedFrom: me.id });
+    toast(`Patient ${esc(p.id)} moved to ${esc(to.name)}`, [{ label: 'Undo', act: 'undoMove', data: { id: p.id } }]);
+    render();
+  },
+  async undoMove(el) {
+    const p = await db.get('patients', el.dataset.id);
+    if (!p || p.movedFrom !== me.id) return;
+    await db.put('patients', { ...p, ownerId: me.id });
+    hideToast(); toast('Move undone'); render();
+  },
+  async deletePatient(el) {
+    const p = await db.get('patients', el.dataset.id);
+    if (!p || !isMine(p)) return;
+    const evs = await db.eventsFor(p.id);
+    const r = await dialog(`<h2>Delete patient ${esc(p.id)}?</h2><p class="muted small" style="margin:0 0 .75rem">This permanently deletes the patient, ${plural(evs.length, 'event')} and all scores. It cannot be undone. Download a backup first if you may need them.</p>
+      <label class="small" for="cf" style="font-weight:600">Type <strong>${esc(p.id)}</strong> to confirm</label>
+      <input class="input" id="cf" name="cf" autocomplete="off" autocapitalize="characters" style="margin-top:.4rem" autofocus>${dlgButtons('Delete', true)}`);
+    if (r !== 'ok') return;
+    if (val('cf').trim() !== p.id) { toast('The ID did not match. Nothing was deleted.'); return; }
+    for (const e of evs) await db.del('events', e.id);
+    for (const o of (await db.all('overrides')).filter((o) => o.patientId === p.id)) await db.del('overrides', o.key);
+    await db.del('patients', p.id);
+    for (const m of [ui.period, ui.reportDay, ui.historyDay]) delete m[p.id];
+    toast(`Patient ${esc(p.id)} deleted`); render();
+  },
   signOut() { LS.del('session'); ui.period = {}; go('#/'); },
   async persist() { const ok = await navigator.storage?.persist?.(); toast(ok ? 'Your data is now protected.' : 'The browser did not allow it yet. Installing the app usually helps.'); render(); },
   async exportCsv() {
@@ -697,17 +806,18 @@ const forms = {
     const id = f.id.value.trim().replace(/\s+/g, '-');
     const start = f.start.value ? fromDateInput(f.start.value) : startOfDay(Date.now());
     if (!id) ui.error = 'Please enter a patient ID.';
-    else if (await db.get('patients', id)) ui.error = 'A patient with this ID already exists.';
+    else if (await db.get('patients', id)) ui.error = 'A patient with this ID already exists on this device. Choose another ID.';
     else if (start > Date.now()) ui.error = 'The first day cannot be in the future.';
     else ui.error = '';
     if (ui.error) { render(); return; }
-    await db.put('patients', { id, startDate: start, createdAt: Date.now(), createdBy: me.id });
+    await db.put('patients', { id, startDate: start, createdAt: Date.now(), createdBy: me.id, ownerId: me.id });
     go(`#/p/${enc(id)}/record`);
   }
 };
 
 // ---------- event wiring ----------
 document.addEventListener('click', (ev) => {
+  document.querySelectorAll('details.switch[open]').forEach((d) => { if (!d.contains(ev.target)) d.open = false; });
   const el = ev.target.closest('[data-act]');
   if (!el || el.disabled) return;
   const fn = actions[el.dataset.act];
@@ -730,6 +840,7 @@ document.addEventListener('input', async (ev) => {
   document.querySelectorAll('.chip').forEach((c) => c.setAttribute('aria-pressed', String(!ui.search && c.dataset.cat === ui.cat)));
 });
 
+document.addEventListener('keydown', (ev) => { if (ev.key === 'Escape') document.querySelectorAll('details.switch[open]').forEach((d) => { d.open = false; d.querySelector('summary')?.focus(); }); });
 window.addEventListener('hashchange', () => { ui.chartSel = null; ui.error = ''; hideToast(); render(); });
 window.addEventListener('beforeinstallprompt', (e) => { e.preventDefault(); deferredInstall = e; const [r] = route(); if (!r || r === 'settings') render(); });
 window.addEventListener('appinstalled', () => { deferredInstall = null; });
